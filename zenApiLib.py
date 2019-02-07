@@ -66,10 +66,17 @@ class zenConnector():
         self.log.info('_sanitizeConfig; configuration:%s' %(configuration))
         if not ('url' in configuration):
             raise Exception('Configuration file missing "url" key')
-        if not ('username' in configuration):
-            raise Exception('Configuration file missing "username" key')
-        if not ('password' in configuration):
-            self.log.error('Configuration file missing "password" key')
+        #Collection Zone or Resource Manager
+        if 'cz' in configuration:
+            if not 'apikey' in configuration:
+                raise Exception('Configuration file missing "apikey" key')
+            configuration['url'] = configuration['url'] + '/' + configuration['cz']
+        elif 'username' in configuration:
+            if not 'password' in configuration:
+                self.log.error('Configuration file missing "password" key')
+        else:
+            #No username or cz prefix configure
+            raise Exception('Configuration missing username or collection zone prefix')
         if not ('timeout' in configuration):
             configuration['timeout'] = 3
         else:
@@ -95,7 +102,7 @@ class zenConnector():
         s = requests.Session()
         retries = Retry(total=self.config['retries'],
                 backoff_factor=1,
-                status_forcelist=[ 500, 502, 503, 504 ])
+                status_forcelist=[ 500, 502, 503, 504, 405 ])
         s.mount(
             'https://',
             HTTPAdapter(max_retries=retries)
@@ -111,6 +118,10 @@ class zenConnector():
         '''
         Call API directly and returns results directly. For paging API calls
         use self.pagingMethodCall.
+        NOTE: There are two methods to pass the method parameters:
+          preferred: self.callMethod('getDevices', uid="/zport/dmd/Devices", keys=["name","ipAddress",])
+           override: self.callMethod('getDevices', override={"data": {"uid":"/zport/dmd/Devices","keys":["name","ipAddress",]})
+        Some router methods pass data in a 'non-standard' way. Using the override method helps deal with that.
         '''
         self.log.info('callMethod; method:%s, payload:%s' % (method, payload))
         # Check that specified method is valid, skip 'IntrospectionRouter' router methods
@@ -132,16 +143,29 @@ class zenConnector():
             'method': method[0],
             'tid': self._tid,
         }
-        apiBody['data'] = [payload]
-        #print "Manual DEBUG: %s" % apiBody
+        if len(payload) == 1 and "override" in payload:
+            #override method
+            apiBody.update(payload['override'])
+        else:
+            #preferred method
+            apiBody['data'] = [payload]
         try:
-            r = self.requestSession.post(self._url,
-                auth=(self.config['username'], self.config['password']),
-                verify=self.config['ssl_verify'],
-                timeout=self.config['timeout'],
-                headers={'content-type':'application/json'},
-                data=json.dumps(apiBody),
-            )
+            if 'cz' in self.config:
+                r = self.requestSession.post(self._url,
+                    verify=self.config['ssl_verify'],
+                    timeout=self.config['timeout'],
+                    headers={'content-type': 'application/json',
+                             'z-api-key': self.config['apikey']},
+                    data=json.dumps(apiBody),
+                )
+            else:
+                r = self.requestSession.post(self._url,
+                    auth=(self.config['username'], self.config['password']),
+                    verify=self.config['ssl_verify'],
+                    timeout=self.config['timeout'],
+                    headers={'content-type':'application/json'},
+                    data=json.dumps(apiBody),
+                )
         except Exception as e:
             msg = 'Reqests exception: %s' % e
             self.log.error(msg)
@@ -164,11 +188,13 @@ class zenConnector():
         self.log.info('pagingMethodCall; method:%s, payload:%s' % (method, payload))
         apiResultsReturned = 0
         apiResultsTotal = 1
-        limitApiCallResults = 50
+        limitApiCallResults = 100
         if 'start' in payload:
             apiResultsReturned = payload['start']
         if 'limit' in payload:
             limitApiCallResults = payload['limit']
+        else:
+            payload['limit'] = limitApiCallResults
 
         while (apiResultsReturned < apiResultsTotal):
             self.log.info("pagingMethodCall: tid:%s, start:%s, limit:%s, estimatedTotal: %s" % (
@@ -247,7 +273,7 @@ class zenConnector():
                 raise Exception('getAllRouters call was not sucessful')
 
             if not len(apiResp['result']['data']) > 0:
-                raise Exception('getAllRouters call did not return any resilts')
+                raise Exception('getAllRouters call did not return any results')
             
             for resp in apiResp['result']['data']:
                 routerKey = resp.get('action', 'unknown')
@@ -330,4 +356,9 @@ class TitleParser(HTMLParser):
         if self.match:
             self.title = data
             self.match = False
-                
+
+
+if __name__ == '__main__':
+    print "For help reference the README.md file"
+    print "If you are trying to make a command line call to the API, all command line invocations functions have been moved to zenApiCli.py"
+    
