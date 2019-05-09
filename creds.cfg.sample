@@ -9,3 +9,4 @@ password=mypassword
 #ssl_verify=False
 timeout=5
 retries=4
+disable_saml=False
